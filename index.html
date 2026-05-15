@@ -8,9 +8,9 @@
 <!-- Favicon inline (avoid 404) -->
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%234f8ef7'/><text y='.9em' font-size='70' x='12'>🔐</text></svg>" />
 
-<!-- Dependencies: unpkg lebih stabil untuk UMD build -->
-<script src="https://unpkg.com/qrcode@1.5.3/build/qrcode.min.js"></script>
-<script src="https://unpkg.com/otpauth@9.3.6/dist/otpauth.umd.min.js"></script>
+<!-- OTPAuth: TOTP generator -->
+<script src="https://cdn.jsdelivr.net/npm/otpauth@9.3.6/dist/otpauth.umd.min.js"></script>
+<!-- QR Code: pure JS, no external lib needed (embedded below) -->
 
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
@@ -462,7 +462,7 @@
       <p class="sub">Scan QR code di bawah dengan aplikasi Google Authenticator untuk menghubungkan akun Anda.</p>
 
       <div class="qr-wrap">
-        <canvas id="qrCanvas"></canvas>
+        <div id="qrCanvas" style="display:inline-block;line-height:0;"></div>
         <p class="qr-label">Scan dengan <strong>Google Authenticator</strong> atau <strong>Authy</strong></p>
       </div>
 
@@ -616,9 +616,9 @@ function doLogin() {
   secret = generateSecret(20);
   document.getElementById('secretDisplay').textContent = formatSecret(secret);
 
-  if (typeof OTPAuth === 'undefined' || typeof QRCode === 'undefined') {
+  if (typeof OTPAuth === 'undefined') {
     document.getElementById('err1txt').textContent =
-      'Library belum selesai load. Refresh halaman dan coba lagi.';
+      'Library OTPAuth belum load. Refresh halaman dan coba lagi.';
     document.getElementById('err1').classList.add('show');
     return;
   }
@@ -634,11 +634,7 @@ function doLogin() {
     });
 
     const otpAuthUri = totp.toString();
-    QRCode.toCanvas(document.getElementById('qrCanvas'), otpAuthUri, {
-      width: 200,
-      margin: 2,
-      color: { dark: '#0d0f14', light: '#ffffff' }
-    }, function(qrErr) { if (qrErr) console.error('QR render error:', qrErr); });
+    renderQR(otpAuthUri, document.getElementById('qrCanvas'), 220);
   } catch(e) {
     console.error('TOTP init error:', e);
     document.getElementById('err1txt').textContent = 'Gagal inisialisasi: ' + e.message;
@@ -783,6 +779,258 @@ function doVerify() {
     }, 600);
   }
 }
+
+// ─── Pure JS QR Code Generator (no external lib) ─────────────
+// Implements QR Code Model 2, byte mode, ECC level M
+// Renders as inline SVG into a container element
+const renderQR = (function() {
+  // --- GF(256) arithmetic ---
+  const EXP = new Uint8Array(512);
+  const LOG = new Uint8Array(256);
+  (function(){
+    let x = 1;
+    for (let i = 0; i < 255; i++) {
+      EXP[i] = x; LOG[x] = i;
+      x <<= 1; if (x & 0x100) x ^= 0x11d;
+    }
+    for (let i = 255; i < 512; i++) EXP[i] = EXP[i-255];
+  })();
+  function gfMul(a,b){ return (!a||!b)?0:EXP[LOG[a]+LOG[b]]; }
+  function gfPoly(deg){ // generator poly for deg ECC symbols
+    let p=[1];
+    for(let i=0;i<deg;i++){
+      const q=new Array(p.length+1).fill(0);
+      for(let j=0;j<p.length;j++){q[j]^=gfMul(p[j],EXP[i]);q[j+1]^=p[j];}
+      p=q;
+    }
+    return p;
+  }
+  function rsEncode(data, nEcc){
+    const gen=gfPoly(nEcc);
+    const rem=[...data,...new Array(nEcc).fill(0)];
+    for(let i=0;i<data.length;i++){
+      const c=rem[i];
+      if(c) for(let j=0;j<gen.length;j++) rem[i+j]^=gfMul(gen[j],c);
+    }
+    return rem.slice(data.length);
+  }
+
+  // --- QR version/capacity tables (versions 1-10, ECC M) ---
+  // [totalCodewords, eccPerBlock, blocksG1, dataG1, blocksG2, dataG2]
+  const VER=[null,
+    [26,10,1,16,0,0],[44,16,1,28,0,0],[70,26,1,44,0,0],
+    [100,18,2,32,0,0],[134,24,2,43,0,0],[172,16,4,27,0,0],
+    [196,18,4,31,0,0],[242,22,2,38,2,39],[292,22,3,36,2,37],
+    [346,26,4,43,1,43]
+  ];
+
+  function getVersion(len){
+    // capacity in bytes for ECC M
+    const cap=[0,14,26,42,62,84,106,122,154,180,213];
+    for(let v=1;v<=10;v++) if(len<=cap[v]) return v;
+    throw new Error('Data too long for QR v10');
+  }
+
+  // --- Bit buffer ---
+  function BitBuf(){
+    let b=[],n=0;
+    return {
+      put(val,len){ for(let i=len-1;i>=0;i--){b.push((val>>i)&1);n++;}},
+      pad(total){ while(n<total){b.push(0);n++;}},
+      bytes(){
+        const out=[];
+        for(let i=0;i<b.length;i+=8){
+          let v=0;for(let j=0;j<8;j++) v=(v<<1)|(b[i+j]||0);
+          out.push(v);
+        }
+        return out;
+      },
+      get length(){ return n; }
+    };
+  }
+
+  // --- Build data codewords ---
+  function buildData(text, ver){
+    const [total,,blocksG1,dataG1,blocksG2,dataG2]=VER[ver];
+    const dataTotal= blocksG1*dataG1+blocksG2*dataG2;
+    const eccTotal = total-dataTotal;
+    const eccPerBlock = VER[ver][1];
+
+    const buf=BitBuf();
+    const bytes=[...new TextEncoder().encode(text)];
+    buf.put(0b0100,4); // byte mode
+    buf.put(bytes.length, ver<10?8:16);
+    bytes.forEach(b=>buf.put(b,8));
+    buf.put(0,4);
+    buf.pad(dataTotal*8);
+    const raw=buf.bytes().slice(0,dataTotal);
+    // pad with 0xEC/0x11
+    const padded=[...raw];
+    let pi=0,pads=[0xEC,0x11];
+    while(padded.length<dataTotal) padded.push(pads[pi++%2]);
+
+    // interleave blocks
+    const blocks=[];let pos=0;
+    for(let i=0;i<blocksG1;i++){blocks.push(padded.slice(pos,pos+dataG1));pos+=dataG1;}
+    for(let i=0;i<blocksG2;i++){blocks.push(padded.slice(pos,pos+dataG2));pos+=dataG2;}
+    const eccBlocks=blocks.map(bl=>rsEncode(bl,eccPerBlock));
+
+    const out=[];
+    const maxLen=Math.max(...blocks.map(b=>b.length));
+    for(let i=0;i<maxLen;i++) blocks.forEach(b=>{if(i<b.length)out.push(b[i]);});
+    for(let i=0;i<eccPerBlock;i++) eccBlocks.forEach(e=>out.push(e[i]));
+    return out;
+  }
+
+  // --- QR matrix builder ---
+  const FINDER=[[1,1,1,1,1,1,1],[1,0,0,0,0,0,1],[1,0,1,1,1,0,1],[1,0,1,1,1,0,1],[1,0,1,1,1,0,1],[1,0,0,0,0,0,1],[1,1,1,1,1,1,1]];
+  function makeMatrix(ver){
+    const size=ver*4+17;
+    const m=Array.from({length:size},()=>new Array(size).fill(null));
+    const isFunc=Array.from({length:size},()=>new Array(size).fill(false));
+    function set(r,c,v){m[r][c]=v;isFunc[r][c]=true;}
+    // finder patterns
+    [[0,0],[0,size-7],[size-7,0]].forEach(([rr,cc])=>{
+      for(let r=0;r<7;r++) for(let c=0;c<7;c++) set(rr+r,cc+c,FINDER[r][c]);
+      // separator
+      for(let i=-1;i<=7;i++){
+        if(rr+i>=0&&rr+i<size&&cc-1>=0) set(rr+i,cc-1,0);
+        if(rr-1>=0&&rr+i<size&&cc+i>=0&&cc+i<size) set(rr-1,cc+i,0);
+        if(rr+7<size&&cc+i>=0&&cc+i<size) set(rr+7,cc+i,0);
+        if(cc+7<size&&rr+i>=0&&rr+i<size) set(rr+i,cc+7,0);
+      }
+    });
+    // timing
+    for(let i=8;i<size-8;i++){set(6,i,(i%2)===0?1:0);set(i,6,(i%2)===0?1:0);}
+    // dark module
+    set(size-8,8,1);
+    // format info placeholders
+    for(let i=0;i<9;i++){if(!isFunc[8][i]){set(8,i,0);}if(!isFunc[i][8]){set(i,8,0);}}
+    for(let i=size-8;i<size;i++){if(!isFunc[8][i])set(8,i,0);if(!isFunc[i][8])set(i,8,0);}
+    // alignment patterns (ver>=2)
+    const AP={2:[6,18],3:[6,22],4:[6,26],5:[6,30],6:[6,34],7:[6,22,38]};
+    if(ver>=2){
+      const pos=AP[ver]||[];
+      for(const r of pos) for(const c of pos){
+        if(isFunc[r][c]) continue;
+        for(let dr=-2;dr<=2;dr++) for(let dc=-2;dc<=2;dc++)
+          set(r+dr,c+dc,(Math.max(Math.abs(dr),Math.abs(dc))===2||dr===0&&dc===0)?1:0);
+      }
+    }
+    return {m,isFunc,size};
+  }
+
+  function placeData(m,isFunc,size,codewords){
+    let bitIdx=0;
+    function getBit(){
+      if(bitIdx>=codewords.length*8) return 0;
+      const b=Math.floor(bitIdx/8), bit=7-(bitIdx%8);
+      bitIdx++;
+      return (codewords[b]>>bit)&1;
+    }
+    let up=true;
+    for(let right=size-1;right>=1;right-=2){
+      if(right===6) right=5;
+      for(let vert=0;vert<size;vert++){
+        const row=up?size-1-vert:vert;
+        for(let lr=0;lr<2;lr++){
+          const col=right-lr;
+          if(!isFunc[row][col]) m[row][col]=getBit();
+        }
+      }
+      up=!up;
+    }
+  }
+
+  // Format string ECC M, mask 0 (010)
+  const FORMAT_STR=[
+    0x5412,0x5125,0x5E7C,0x5B4B,0x45F9,0x40CE,0x4F97,0x4AA0,
+    0x77C4,0x72F3,0x7DAA,0x789D,0x662F,0x6318,0x6C41,0x6976,
+    0x1689,0x13BE,0x1CE7,0x19D0,0x0762,0x0255,0x0D0C,0x083B,
+    0x355F,0x3068,0x3F31,0x3A06,0x24B4,0x2183,0x2EDA,0x2BED
+  ];
+
+  function applyMask(m, size, mask){
+    for(let r=0;r<size;r++) for(let c=0;c<size;c++){
+      if(m[r][c]===null) continue;
+      let inv=false;
+      if(mask===0) inv=(r+c)%2===0;
+      else if(mask===1) inv=r%2===0;
+      else if(mask===2) inv=c%3===0;
+      else if(mask===3) inv=(r+c)%3===0;
+      else if(mask===4) inv=(Math.floor(r/2)+Math.floor(c/3))%2===0;
+      else if(mask===5) inv=(r*c)%2+(r*c)%3===0;
+      else if(mask===6) inv=((r*c)%2+(r*c)%3)%2===0;
+      else if(mask===7) inv=((r+c)%2+(r*c)%3)%2===0;
+      if(inv) m[r][c]^=1;
+    }
+  }
+
+  function writeFormat(m, size, mask){
+    const fs=FORMAT_STR[0b01<<3|mask]; // ECC M = 01
+    const bits=[];
+    for(let i=14;i>=0;i--) bits.push((fs>>i)&1);
+    // horizontal
+    let i=0;
+    for(let c=0;c<8;c++){if(c===6)continue;m[8][c]=bits[i++];}
+    for(let c=size-8;c<size;c++) m[8][c]=bits[i++];
+    // vertical
+    i=0;
+    for(let r=size-7;r<size;r++) m[r][8]=bits[i++];
+    for(let r=7;r>=0;r--){if(r===6)continue;m[r][8]=bits[i++];}
+  }
+
+  // Score penalty for mask selection
+  function score(m,size){
+    let pen=0;
+    // rule 1: 5+ same in row/col
+    for(let r=0;r<size;r++){
+      let run=1;
+      for(let c=1;c<size;c++){
+        if(m[r][c]===m[r][c-1])run++;else{if(run>=5)pen+=run-2;run=1;}
+      }
+    }
+    // rule 3: finder-like pattern
+    const P1=[1,0,1,1,1,0,1,0,0,0,0],P2=[0,0,0,0,1,0,1,1,1,0,1];
+    for(let r=0;r<size;r++) for(let c=0;c<=size-11;c++){
+      let h1=true,h2=true;
+      for(let i=0;i<11;i++){h1=h1&&m[r][c+i]===P1[i];h2=h2&&m[r][c+i]===P2[i];}
+      if(h1||h2) pen+=40;
+    }
+    return pen;
+  }
+
+  function buildQR(text){
+    const ver=getVersion(new TextEncoder().encode(text).length);
+    const codewords=buildData(text,ver);
+    let bestMask=0,bestScore=Infinity;
+    // try masks 0..3 for speed
+    for(let mask=0;mask<4;mask++){
+      const {m,isFunc,size}=makeMatrix(ver);
+      placeData(m,isFunc,size,codewords);
+      applyMask(m,size,mask);
+      writeFormat(m,size,mask);
+      const s=score(m,size);
+      if(s<bestScore){bestScore=s;bestMask=mask;}
+    }
+    const {m,isFunc,size}=makeMatrix(ver);
+    placeData(m,isFunc,size,codewords);
+    applyMask(m,size,bestMask);
+    writeFormat(m,size,bestMask);
+    return {m,size};
+  }
+
+  return function renderQR(text, container, px){
+    const {m,size}=buildQR(text);
+    const cell=px/size;
+    let svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${px}" height="${px}" viewBox="0 0 ${size} ${size}" shape-rendering="crispEdges">`;
+    svg+=`<rect width="${size}" height="${size}" fill="#fff"/>`;
+    for(let r=0;r<size;r++) for(let c=0;c<size;c++)
+      if(m[r][c]) svg+=`<rect x="${c}" y="${r}" width="1" height="1" fill="#0d0f14"/>`;
+    svg+='</svg>';
+    container.innerHTML=svg;
+  };
+})();
 
 // ─── Reset ────────────────────────────────────────────────────
 function resetDemo() {
