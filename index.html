@@ -5,9 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Demo Login 2FA — Google Authenticator</title>
 
-<!-- Dependencies -->
-<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/otpauth@9.3.6/dist/otpauth.umd.min.js"></script>
+<!-- Favicon inline (avoid 404) -->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%234f8ef7'/><text y='.9em' font-size='70' x='12'>🔐</text></svg>" />
+
+<!-- Dependencies: unpkg lebih stabil untuk UMD build -->
+<script src="https://unpkg.com/qrcode@1.5.3/build/qrcode.min.js"></script>
+<script src="https://unpkg.com/otpauth@9.3.6/dist/otpauth.umd.min.js"></script>
 
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
@@ -613,6 +616,13 @@ function doLogin() {
   secret = generateSecret(20);
   document.getElementById('secretDisplay').textContent = formatSecret(secret);
 
+  if (typeof OTPAuth === 'undefined' || typeof QRCode === 'undefined') {
+    document.getElementById('err1txt').textContent =
+      'Library belum selesai load. Refresh halaman dan coba lagi.';
+    document.getElementById('err1').classList.add('show');
+    return;
+  }
+
   try {
     totp = new OTPAuth.TOTP({
       issuer: 'MyApp',
@@ -628,9 +638,12 @@ function doLogin() {
       width: 200,
       margin: 2,
       color: { dark: '#0d0f14', light: '#ffffff' }
-    }, err => { if (err) console.error(err); });
+    }, function(qrErr) { if (qrErr) console.error('QR render error:', qrErr); });
   } catch(e) {
     console.error('TOTP init error:', e);
+    document.getElementById('err1txt').textContent = 'Gagal inisialisasi: ' + e.message;
+    document.getElementById('err1').classList.add('show');
+    return;
   }
 
   showStep(2);
