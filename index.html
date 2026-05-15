@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Demo Login 2FA — Google Authenticator</title>
+
+<!-- Dependencies -->
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/otpauth@9.3.6/dist/otpauth.umd.min.js"></script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0d0f14;
+    --surface: #161922;
+    --surface2: #1e2230;
+    --border: rgba(255,255,255,0.08);
+    --border2: rgba(255,255,255,0.15);
+    --text: #f0f2f7;
+    --muted: #7a8199;
+    --accent: #4f8ef7;
+    --accent-dim: rgba(79,142,247,0.12);
+    --accent-glow: rgba(79,142,247,0.25);
+    --success: #34d399;
+    --success-dim: rgba(52,211,153,0.12);
+    --danger: #f87171;
+    --danger-dim: rgba(248,113,113,0.12);
+    --warn: #fbbf24;
+    --radius: 12px;
+    --radius-sm: 8px;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Sora', sans-serif;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem 1rem;
+  }
+
+  /* Subtle grid background */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(79,142,247,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(79,142,247,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    max-width: 440px;
+  }
+
+  /* Top brand */
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 2rem;
+  }
+
+  .brand-icon {
+    width: 38px; height: 38px;
+    background: var(--accent);
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 0 20px var(--accent-glow);
+  }
+
+  .brand-icon svg { width: 20px; height: 20px; fill: white; }
+  .brand-name { font-size: 17px; font-weight: 700; letter-spacing: -0.3px; }
+  .brand-badge {
+    margin-left: auto;
+    font-size: 11px; font-weight: 500;
+    background: var(--accent-dim);
+    color: var(--accent);
+    border: 1px solid var(--accent-glow);
+    border-radius: 20px;
+    padding: 3px 10px;
+  }
+
+  /* Card */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 2rem;
+    animation: slideUp 0.3s ease;
+  }
+
+  @keyframes slideUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Steps */
+  .step { display: none; }
+  .step.active { display: block; animation: slideUp 0.25s ease; }
+
+  /* Step indicator */
+  .steps-bar {
+    display: flex; gap: 6px; margin-bottom: 1.75rem;
+  }
+  .steps-bar span {
+    flex: 1; height: 3px; border-radius: 3px;
+    background: var(--surface2);
+    transition: background 0.4s;
+  }
+  .steps-bar span.active { background: var(--accent); }
+
+  /* Typography */
+  h2 {
+    font-size: 21px; font-weight: 700;
+    letter-spacing: -0.4px;
+    margin-bottom: 6px;
+  }
+  .sub {
+    font-size: 13.5px; color: var(--muted);
+    line-height: 1.6; margin-bottom: 1.5rem;
+  }
+
+  /* Form */
+  .field { margin-bottom: 1.1rem; }
+  label {
+    display: block;
+    font-size: 12px; font-weight: 600;
+    color: var(--muted);
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    margin-bottom: 7px;
+  }
+  input[type=text], input[type=email], input[type=password] {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 11px 14px;
+    color: var(--text);
+    font-family: 'Sora', sans-serif;
+    font-size: 14px;
+    outline: none;
+    transition: border 0.2s, box-shadow 0.2s;
+  }
+  input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-dim);
+  }
+
+  .pw-wrap { position: relative; }
+  .pw-eye {
+    position: absolute; right: 12px; top: 50%;
+    transform: translateY(-50%);
+    background: none; border: none;
+    color: var(--muted); cursor: pointer;
+    font-size: 16px; padding: 0;
+    transition: color 0.2s;
+  }
+  .pw-eye:hover { color: var(--text); }
+
+  /* Buttons */
+  .btn {
+    width: 100%; padding: 12px;
+    border: none; border-radius: var(--radius-sm);
+    font-family: 'Sora', sans-serif;
+    font-size: 14px; font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-top: 4px;
+  }
+  .btn-primary {
+    background: var(--accent);
+    color: white;
+    box-shadow: 0 4px 16px var(--accent-glow);
+  }
+  .btn-primary:hover { filter: brightness(1.1); transform: translateY(-1px); }
+  .btn-primary:active { transform: translateY(0); }
+  .btn-primary:disabled {
+    background: var(--surface2);
+    color: var(--muted);
+    box-shadow: none;
+    cursor: not-allowed;
+    transform: none;
+  }
+  .btn-ghost {
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid var(--border2);
+    margin-top: 10px;
+  }
+  .btn-ghost:hover { background: var(--surface2); color: var(--text); }
+
+  /* Alert */
+  .alert {
+    display: none;
+    align-items: center; gap: 8px;
+    padding: 10px 13px;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    margin-bottom: 1rem;
+    animation: slideUp 0.2s ease;
+  }
+  .alert.show { display: flex; }
+  .alert.err { background: var(--danger-dim); color: var(--danger); border: 1px solid rgba(248,113,113,0.2); }
+  .alert.ok  { background: var(--success-dim); color: var(--success); border: 1px solid rgba(52,211,153,0.2); }
+
+  /* OTP boxes */
+  .otp-row {
+    display: flex; gap: 9px;
+    justify-content: center;
+    margin: 1.25rem 0;
+  }
+  .otp-box {
+    width: 52px; height: 58px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    text-align: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 24px; font-weight: 600;
+    color: var(--text);
+    outline: none;
+    caret-color: var(--accent);
+    transition: border 0.15s, box-shadow 0.15s;
+  }
+  .otp-box:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-dim);
+  }
+  .otp-box.filled { border-color: rgba(79,142,247,0.4); }
+  .otp-box.err-shake { border-color: var(--danger) !important; animation: shake 0.4s ease; }
+
+  @keyframes shake {
+    0%,100% { transform: translateX(0); }
+    25% { transform: translateX(-4px); }
+    75% { transform: translateX(4px); }
+  }
+
+  /* QR Setup section */
+  .qr-wrap {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.5rem;
+    margin-bottom: 1.25rem;
+    text-align: center;
+  }
+  .qr-wrap canvas { border-radius: 8px; }
+  .qr-label {
+    font-size: 12px; color: var(--muted);
+    margin-top: 12px; line-height: 1.5;
+  }
+
+  .secret-box {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
+    margin-bottom: 1.25rem;
+  }
+  .secret-label { font-size: 11px; color: var(--muted); flex-shrink: 0; }
+  .secret-val {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px; font-weight: 600;
+    color: var(--accent);
+    flex: 1;
+    word-break: break-all;
+  }
+  .copy-btn {
+    background: none; border: none;
+    color: var(--muted); cursor: pointer;
+    font-size: 15px; padding: 2px;
+    transition: color 0.2s;
+    flex-shrink: 0;
+  }
+  .copy-btn:hover { color: var(--accent); }
+
+  /* Timer */
+  .timer-wrap {
+    display: flex; align-items: center; gap: 14px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 12px 16px;
+    margin-bottom: 1.25rem;
+  }
+  .timer-ring { flex-shrink: 0; position: relative; width: 44px; height: 44px; }
+  .timer-ring svg { width: 44px; height: 44px; }
+  .timer-ring .bg { fill: none; stroke: var(--surface); stroke-width: 3; }
+  .timer-ring .fg { fill: none; stroke: var(--accent); stroke-width: 3; stroke-linecap: round; transform-origin: center; transform: rotate(-90deg); transition: stroke 0.3s; }
+  .timer-num {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px; font-weight: 600;
+    color: var(--text);
+  }
+  .timer-info { flex: 1; }
+  .timer-info .ti-label { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+  .timer-info .ti-code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 22px; font-weight: 600;
+    letter-spacing: 3px;
+    color: var(--text);
+  }
+  .timer-progress {
+    height: 3px; border-radius: 2px;
+    background: var(--surface);
+    margin-top: 6px; overflow: hidden;
+  }
+  .timer-bar {
+    height: 100%; border-radius: 2px;
+    background: var(--accent);
+    transition: width 1s linear, background 0.3s;
+  }
+
+  /* Steps list */
+  .step-list { list-style: none; margin-bottom: 1.5rem; }
+  .step-list li {
+    display: flex; align-items: flex-start; gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 13.5px; line-height: 1.5;
+  }
+  .step-list li:last-child { border-bottom: none; }
+  .step-num {
+    width: 22px; height: 22px; border-radius: 50%;
+    background: var(--accent-dim);
+    color: var(--accent);
+    font-size: 11px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0; margin-top: 1px;
+  }
+
+  /* Success */
+  .success-glow {
+    width: 72px; height: 72px; border-radius: 50%;
+    background: var(--success-dim);
+    border: 1px solid rgba(52,211,153,0.25);
+    display: flex; align-items: center; justify-content: center;
+    margin: 0 auto 1.5rem;
+    font-size: 32px;
+    box-shadow: 0 0 30px rgba(52,211,153,0.2);
+    animation: pulse 2s ease infinite;
+  }
+  @keyframes pulse {
+    0%,100% { box-shadow: 0 0 20px rgba(52,211,153,0.2); }
+    50% { box-shadow: 0 0 40px rgba(52,211,153,0.35); }
+  }
+
+  .info-grid {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    margin-bottom: 1.5rem;
+  }
+  .info-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .info-row:last-child { border-bottom: none; }
+  .info-row .ir-key { color: var(--muted); width: 110px; flex-shrink: 0; font-size: 12px; }
+  .info-row .ir-val { color: var(--text); font-weight: 500; }
+
+  .divider { display: flex; align-items: center; gap: 10px; margin: 1.2rem 0; }
+  .divider::before,.divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+  .divider span { font-size: 12px; color: var(--muted); }
+
+  /* Infobox */
+  .infobox {
+    background: var(--accent-dim);
+    border: 1px solid var(--accent-glow);
+    border-radius: var(--radius-sm);
+    padding: 11px 14px;
+    font-size: 13px;
+    color: var(--accent);
+    margin-bottom: 1.25rem;
+    line-height: 1.55;
+  }
+  .infobox b { font-weight: 600; }
+
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: var(--accent-dim); color: var(--accent);
+    border: 1px solid var(--accent-glow);
+    border-radius: 20px;
+    padding: 3px 11px;
+    font-size: 11px; font-weight: 600;
+    letter-spacing: 0.3px;
+    margin-bottom: 1rem;
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <div class="brand">
+    <div class="brand-icon">
+      <svg viewBox="0 0 24 24"><path d="M12 2a5 5 0 1 1 0 10A5 5 0 0 1 12 2zm0 12c5.33 0 8 2.67 8 4v2H4v-2c0-1.33 2.67-4 8-4z"/></svg>
+    </div>
+    <span class="brand-name">MyApp</span>
+    <span class="brand-badge">2FA Demo</span>
+  </div>
+
+  <div class="card">
+    <div class="steps-bar" id="stepsBar">
+      <span></span><span></span><span></span><span></span>
+    </div>
+
+    <!-- ─── STEP 1: Login ─── -->
+    <div class="step active" id="s1">
+      <h2>Selamat datang</h2>
+      <p class="sub">Masuk ke akun Anda untuk melanjutkan ke verifikasi 2FA.</p>
+      <div class="alert err" id="err1">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+        <span id="err1txt"></span>
+      </div>
+      <div class="field">
+        <label>Email</label>
+        <input type="email" id="iEmail" value="admin@myapp.id" autocomplete="email" />
+      </div>
+      <div class="field">
+        <label>Kata sandi</label>
+        <div class="pw-wrap">
+          <input type="password" id="iPw" value="admin123" autocomplete="current-password" />
+          <button class="pw-eye" id="pwEyeBtn" onclick="togglePw()" title="Tampilkan/sembunyikan">
+            👁
+          </button>
+        </div>
+      </div>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:1rem;">
+        Demo: email <b style="color:var(--text)">admin@myapp.id</b> / password <b style="color:var(--text)">admin123</b>
+      </p>
+      <button class="btn btn-primary" onclick="doLogin()">Masuk →</button>
+    </div>
+
+    <!-- ─── STEP 2: Setup 2FA (scan QR) ─── -->
+    <div class="step" id="s2">
+      <div class="badge">⚙️ &nbsp;Setup awal</div>
+      <h2>Aktifkan Google Authenticator</h2>
+      <p class="sub">Scan QR code di bawah dengan aplikasi Google Authenticator untuk menghubungkan akun Anda.</p>
+
+      <div class="qr-wrap">
+        <canvas id="qrCanvas"></canvas>
+        <p class="qr-label">Scan dengan <strong>Google Authenticator</strong> atau <strong>Authy</strong></p>
+      </div>
+
+      <p style="font-size:12px;color:var(--muted);margin-bottom:8px;">Atau masukkan kode manual:</p>
+      <div class="secret-box">
+        <span class="secret-label">Secret key</span>
+        <span class="secret-val" id="secretDisplay"></span>
+        <button class="copy-btn" onclick="copySecret()" title="Copy">📋</button>
+      </div>
+
+      <ul class="step-list">
+        <li><span class="step-num">1</span><span>Buka <b>Google Authenticator</b> di HP Anda</span></li>
+        <li><span class="step-num">2</span><span>Tap <b>"+"</b> → pilih <b>Scan QR code</b></span></li>
+        <li><span class="step-num">3</span><span>Arahkan kamera ke QR code di atas</span></li>
+        <li><span class="step-num">4</span><span>Masukkan kode 6 digit yang muncul di halaman berikutnya</span></li>
+      </ul>
+
+      <button class="btn btn-primary" onclick="goToVerify()">Sudah scan, lanjut →</button>
+      <button class="btn btn-ghost" onclick="goBack(1)">← Kembali</button>
+    </div>
+
+    <!-- ─── STEP 3: Verify OTP ─── -->
+    <div class="step" id="s3">
+      <div class="badge">🔐 &nbsp;Verifikasi</div>
+      <h2>Masukkan kode OTP</h2>
+      <p class="sub">Buka Google Authenticator dan masukkan kode 6 digit yang ditampilkan untuk akun <b>MyApp</b>.</p>
+
+      <div class="timer-wrap" id="timerWrap">
+        <div class="timer-ring">
+          <svg viewBox="0 0 44 44">
+            <circle class="bg" cx="22" cy="22" r="18"/>
+            <circle class="fg" cx="22" cy="22" r="18" id="timerFg" stroke-dasharray="113.1" stroke-dashoffset="0"/>
+          </svg>
+          <div class="timer-num" id="timerNum">30</div>
+        </div>
+        <div class="timer-info">
+          <div class="ti-label">Kode aktif (dari Google Authenticator):</div>
+          <div class="ti-code" id="liveCode">— — — — — —</div>
+          <div class="timer-progress"><div class="timer-bar" id="timerBar"></div></div>
+        </div>
+      </div>
+
+      <div class="infobox">
+        <b>Catatan:</b> Kode di atas hanya tampil jika Anda membuka file ini di <b>localhost / server</b>
+        (bukan file://). Di production, kode hanya ada di aplikasi authenticator Anda.
+      </div>
+
+      <div class="alert err" id="err3">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+        Kode salah atau sudah kedaluwarsa. Coba kode baru dari aplikasi.
+      </div>
+
+      <label>Kode 6 digit</label>
+      <div class="otp-row" id="otpRow"></div>
+
+      <button class="btn btn-primary" id="btnVerify" onclick="doVerify()" disabled>Verifikasi →</button>
+      <button class="btn btn-ghost" onclick="goBack(2)">← Kembali</button>
+    </div>
+
+    <!-- ─── STEP 4: Success ─── -->
+    <div class="step" id="s4">
+      <div class="success-glow">✓</div>
+      <h2 style="text-align:center;margin-bottom:8px">Login berhasil!</h2>
+      <p class="sub" style="text-align:center">Identitas Anda telah diverifikasi dengan Google Authenticator.</p>
+
+      <div class="info-grid">
+        <div class="info-row">
+          <span class="ir-key">Email</span>
+          <span class="ir-val" id="sEmail"></span>
+        </div>
+        <div class="info-row">
+          <span class="ir-key">Metode 2FA</span>
+          <span class="ir-val" style="color:var(--success)">✓ Google Authenticator (TOTP)</span>
+        </div>
+        <div class="info-row">
+          <span class="ir-key">Algoritma</span>
+          <span class="ir-val" style="font-family:'JetBrains Mono',monospace;font-size:12px;">HMAC-SHA1 · 30s · 6 digit</span>
+        </div>
+        <div class="info-row">
+          <span class="ir-key">Waktu login</span>
+          <span class="ir-val" id="sTime"></span>
+        </div>
+      </div>
+
+      <button class="btn btn-primary" onclick="resetDemo()">🔄 &nbsp;Ulangi demo</button>
+      <button class="btn btn-ghost" onclick="goBack(2)">← Setup ulang 2FA</button>
+    </div>
+  </div>
+
+  <p style="text-align:center;font-size:12px;color:var(--muted);margin-top:1.25rem;">
+    Demo ini menggunakan TOTP standar RFC 6238 · Secret disimpan di memori saja
+  </p>
+</div>
+
+<script>
+// ─── State ───────────────────────────────────────────────────
+let secret = null;
+let totp = null;
+let timerInterval = null;
+let otpDigits = ['','','','','',''];
+
+// ─── Init ─────────────────────────────────────────────────────
+function generateSecret(len = 16) {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let s = '';
+  for (let i = 0; i < len; i++) s += chars[Math.floor(Math.random() * chars.length)];
+  return s;
+}
+
+function formatSecret(s) {
+  return s.match(/.{1,4}/g).join(' ');
+}
+
+// ─── Step navigation ─────────────────────────────────────────
+function showStep(n) {
+  document.querySelectorAll('.step').forEach((el, i) => {
+    el.classList.toggle('active', i + 1 === n);
+  });
+  const dots = document.querySelectorAll('#stepsBar span');
+  dots.forEach((d, i) => d.classList.toggle('active', i < n));
+}
+
+function goBack(toStep) {
+  if (toStep === 2 && timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+  showStep(toStep);
+}
+
+// ─── STEP 1: Login ────────────────────────────────────────────
+function togglePw() {
+  const inp = document.getElementById('iPw');
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+}
+
+function doLogin() {
+  const email = document.getElementById('iEmail').value.trim();
+  const pw    = document.getElementById('iPw').value;
+  const err   = document.getElementById('err1');
+  const errTxt = document.getElementById('err1txt');
+  err.classList.remove('show');
+
+  if (!email || !pw) {
+    errTxt.textContent = 'Isi semua kolom terlebih dahulu.';
+    err.classList.add('show'); return;
+  }
+  if (email !== 'admin@myapp.id' || pw !== 'admin123') {
+    errTxt.textContent = 'Email atau kata sandi salah.';
+    err.classList.add('show'); return;
+  }
+
+  // Generate TOTP secret
+  secret = generateSecret(20);
+  document.getElementById('secretDisplay').textContent = formatSecret(secret);
+
+  try {
+    totp = new OTPAuth.TOTP({
+      issuer: 'MyApp',
+      label: email,
+      algorithm: 'SHA1',
+      digits: 6,
+      period: 30,
+      secret: OTPAuth.Secret.fromBase32(secret)
+    });
+
+    const otpAuthUri = totp.toString();
+    QRCode.toCanvas(document.getElementById('qrCanvas'), otpAuthUri, {
+      width: 200,
+      margin: 2,
+      color: { dark: '#0d0f14', light: '#ffffff' }
+    }, err => { if (err) console.error(err); });
+  } catch(e) {
+    console.error('TOTP init error:', e);
+  }
+
+  showStep(2);
+}
+
+// ─── STEP 2: QR Setup ────────────────────────────────────────
+function copySecret() {
+  navigator.clipboard.writeText(secret.match(/.{1,4}/g).join(' '))
+    .then(() => alert('Secret key disalin ke clipboard!'))
+    .catch(() => alert('Gagal menyalin. Copy manual: ' + secret));
+}
+
+function goToVerify() {
+  buildOTPBoxes();
+  startTimer();
+  showStep(3);
+}
+
+// ─── STEP 3: OTP Verify ──────────────────────────────────────
+function buildOTPBoxes() {
+  otpDigits = ['','','','','',''];
+  const row = document.getElementById('otpRow');
+  row.innerHTML = '';
+  for (let i = 0; i < 6; i++) {
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.maxLength = 1;
+    inp.inputMode = 'numeric';
+    inp.className = 'otp-box';
+    inp.dataset.i = i;
+
+    inp.addEventListener('input', e => {
+      const v = e.target.value.replace(/\D/g, '');
+      inp.value = v;
+      otpDigits[i] = v;
+      inp.classList.toggle('filled', !!v);
+      if (v && i < 5) row.children[i + 1].focus();
+      checkFilled();
+    });
+
+    inp.addEventListener('keydown', e => {
+      if (e.key === 'Backspace' && !inp.value && i > 0) {
+        const prev = row.children[i - 1];
+        prev.value = ''; otpDigits[i - 1] = '';
+        prev.classList.remove('filled');
+        prev.focus(); checkFilled();
+      }
+    });
+
+    inp.addEventListener('paste', e => {
+      e.preventDefault();
+      const text = (e.clipboardData || window.clipboardData).getData('text').replace(/\D/g,'').slice(0,6);
+      for (let j = 0; j < text.length && j < 6; j++) {
+        row.children[j].value = text[j];
+        otpDigits[j] = text[j];
+        row.children[j].classList.add('filled');
+      }
+      if (text.length > 0) row.children[Math.min(text.length, 5)].focus();
+      checkFilled();
+    });
+
+    row.appendChild(inp);
+  }
+  document.getElementById('btnVerify').disabled = true;
+  document.getElementById('err3').classList.remove('show');
+}
+
+function checkFilled() {
+  document.getElementById('btnVerify').disabled = !otpDigits.every(d => d !== '');
+}
+
+function startTimer() {
+  if (timerInterval) clearInterval(timerInterval);
+
+  function tick() {
+    const now    = Math.floor(Date.now() / 1000);
+    const remain = 30 - (now % 30);
+    const pct    = remain / 30;
+
+    // Update timer ring
+    const circ = 2 * Math.PI * 18; // r=18
+    const offset = circ * (1 - pct);
+    const fg = document.getElementById('timerFg');
+    if (fg) {
+      fg.style.strokeDashoffset = offset;
+      fg.style.stroke = remain <= 8 ? 'var(--danger)' : 'var(--accent)';
+    }
+    const numEl = document.getElementById('timerNum');
+    if (numEl) numEl.textContent = remain;
+
+    // Bar
+    const bar = document.getElementById('timerBar');
+    if (bar) {
+      bar.style.width = (pct * 100) + '%';
+      bar.style.background = remain <= 8 ? 'var(--danger)' : 'var(--accent)';
+    }
+
+    // Live code (only show if totp initialized)
+    if (totp) {
+      try {
+        const code = totp.generate();
+        const lc = document.getElementById('liveCode');
+        if (lc) lc.textContent = code.slice(0,3) + ' ' + code.slice(3);
+      } catch(e) {}
+    }
+  }
+
+  tick();
+  timerInterval = setInterval(tick, 1000);
+}
+
+function doVerify() {
+  if (!totp) return;
+  const entered = otpDigits.join('');
+  let valid = false;
+  try {
+    // Validate with ±1 window tolerance
+    const delta = totp.validate({ token: entered, window: 1 });
+    valid = delta !== null;
+  } catch(e) {
+    valid = false;
+  }
+
+  if (valid) {
+    clearInterval(timerInterval); timerInterval = null;
+    document.getElementById('sEmail').textContent = document.getElementById('iEmail').value;
+    document.getElementById('sTime').textContent = new Date().toLocaleString('id-ID', {
+      dateStyle: 'long', timeStyle: 'medium'
+    });
+    showStep(4);
+  } else {
+    document.getElementById('err3').classList.add('show');
+    document.querySelectorAll('.otp-box').forEach(b => b.classList.add('err-shake'));
+    setTimeout(() => {
+      document.querySelectorAll('.otp-box').forEach(b => b.classList.remove('err-shake'));
+      buildOTPBoxes();
+    }, 600);
+  }
+}
+
+// ─── Reset ────────────────────────────────────────────────────
+function resetDemo() {
+  secret = null; totp = null;
+  if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+  document.getElementById('iEmail').value = 'admin@myapp.id';
+  document.getElementById('iPw').value = 'admin123';
+  document.getElementById('iPw').type = 'password';
+  document.getElementById('err1').classList.remove('show');
+  showStep(1);
+}
+
+// ─── Bootstrap ────────────────────────────────────────────────
+showStep(1);
+</script>
+</body>
+</html>
