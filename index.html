@@ -3371,4 +3371,341 @@ exports.getCapacity = function getCapacity (version, errorCorrectionLevel, mode)
  * @param  {Mode} mode                       Data mode
  * @return {Number}                          QR Code version
  */
-exports.getBestVersi
+exports.getBestVersionForData = function getBestVersionForData (data, errorCorrectionLevel) {
+  let seg
+
+  const ecl = ECLevel.from(errorCorrectionLevel, ECLevel.M)
+
+  if (Array.isArray(data)) {
+    if (data.length > 1) {
+      return getBestVersionForMixedData(data, ecl)
+    }
+
+    if (data.length === 0) {
+      return 1
+    }
+
+    seg = data[0]
+  } else {
+    seg = data
+  }
+
+  return getBestVersionForDataLength(seg.mode, seg.getLength(), ecl)
+}
+
+/**
+ * Returns version information with relative error correction bits
+ *
+ * The version information is included in QR Code symbols of version 7 or larger.
+ * It consists of an 18-bit sequence containing 6 data bits,
+ * with 12 error correction bits calculated using the (18, 6) Golay code.
+ *
+ * @param  {Number} version QR Code version
+ * @return {Number}         Encoded version info bits
+ */
+exports.getEncodedBits = function getEncodedBits (version) {
+  if (!VersionCheck.isValid(version) || version < 7) {
+    throw new Error('Invalid QR Code version')
+  }
+
+  let d = version << 12
+
+  while (Utils.getBCHDigit(d) - G18_BCH >= 0) {
+    d ^= (G18 << (Utils.getBCHDigit(d) - G18_BCH))
+  }
+
+  return (version << 12) | d
+}
+
+},{"./error-correction-code":9,"./error-correction-level":10,"./mode":16,"./utils":23,"./version-check":24}],26:[function(require,module,exports){
+const Utils = require('./utils')
+
+function clearCanvas (ctx, canvas, size) {
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+  if (!canvas.style) canvas.style = {}
+  canvas.height = size
+  canvas.width = size
+  canvas.style.height = size + 'px'
+  canvas.style.width = size + 'px'
+}
+
+function getCanvasElement () {
+  try {
+    return document.createElement('canvas')
+  } catch (e) {
+    throw new Error('You need to specify a canvas element')
+  }
+}
+
+exports.render = function render (qrData, canvas, options) {
+  let opts = options
+  let canvasEl = canvas
+
+  if (typeof opts === 'undefined' && (!canvas || !canvas.getContext)) {
+    opts = canvas
+    canvas = undefined
+  }
+
+  if (!canvas) {
+    canvasEl = getCanvasElement()
+  }
+
+  opts = Utils.getOptions(opts)
+  const size = Utils.getImageWidth(qrData.modules.size, opts)
+
+  const ctx = canvasEl.getContext('2d')
+  const image = ctx.createImageData(size, size)
+  Utils.qrToImageData(image.data, qrData, opts)
+
+  clearCanvas(ctx, canvasEl, size)
+  ctx.putImageData(image, 0, 0)
+
+  return canvasEl
+}
+
+exports.renderToDataURL = function renderToDataURL (qrData, canvas, options) {
+  let opts = options
+
+  if (typeof opts === 'undefined' && (!canvas || !canvas.getContext)) {
+    opts = canvas
+    canvas = undefined
+  }
+
+  if (!opts) opts = {}
+
+  const canvasEl = exports.render(qrData, canvas, opts)
+
+  const type = opts.type || 'image/png'
+  const rendererOpts = opts.rendererOpts || {}
+
+  return canvasEl.toDataURL(type, rendererOpts.quality)
+}
+
+},{"./utils":28}],27:[function(require,module,exports){
+const Utils = require('./utils')
+
+function getColorAttrib (color, attrib) {
+  const alpha = color.a / 255
+  const str = attrib + '="' + color.hex + '"'
+
+  return alpha < 1
+    ? str + ' ' + attrib + '-opacity="' + alpha.toFixed(2).slice(1) + '"'
+    : str
+}
+
+function svgCmd (cmd, x, y) {
+  let str = cmd + x
+  if (typeof y !== 'undefined') str += ' ' + y
+
+  return str
+}
+
+function qrToPath (data, size, margin) {
+  let path = ''
+  let moveBy = 0
+  let newRow = false
+  let lineLength = 0
+
+  for (let i = 0; i < data.length; i++) {
+    const col = Math.floor(i % size)
+    const row = Math.floor(i / size)
+
+    if (!col && !newRow) newRow = true
+
+    if (data[i]) {
+      lineLength++
+
+      if (!(i > 0 && col > 0 && data[i - 1])) {
+        path += newRow
+          ? svgCmd('M', col + margin, 0.5 + row + margin)
+          : svgCmd('m', moveBy, 0)
+
+        moveBy = 0
+        newRow = false
+      }
+
+      if (!(col + 1 < size && data[i + 1])) {
+        path += svgCmd('h', lineLength)
+        lineLength = 0
+      }
+    } else {
+      moveBy++
+    }
+  }
+
+  return path
+}
+
+exports.render = function render (qrData, options, cb) {
+  const opts = Utils.getOptions(options)
+  const size = qrData.modules.size
+  const data = qrData.modules.data
+  const qrcodesize = size + opts.margin * 2
+
+  const bg = !opts.color.light.a
+    ? ''
+    : '<path ' + getColorAttrib(opts.color.light, 'fill') +
+      ' d="M0 0h' + qrcodesize + 'v' + qrcodesize + 'H0z"/>'
+
+  const path =
+    '<path ' + getColorAttrib(opts.color.dark, 'stroke') +
+    ' d="' + qrToPath(data, size, opts.margin) + '"/>'
+
+  const viewBox = 'viewBox="' + '0 0 ' + qrcodesize + ' ' + qrcodesize + '"'
+
+  const width = !opts.width ? '' : 'width="' + opts.width + '" height="' + opts.width + '" '
+
+  const svgTag = '<svg xmlns="http://www.w3.org/2000/svg" ' + width + viewBox + ' shape-rendering="crispEdges">' + bg + path + '</svg>\n'
+
+  if (typeof cb === 'function') {
+    cb(null, svgTag)
+  }
+
+  return svgTag
+}
+
+},{"./utils":28}],28:[function(require,module,exports){
+function hex2rgba (hex) {
+  if (typeof hex === 'number') {
+    hex = hex.toString()
+  }
+
+  if (typeof hex !== 'string') {
+    throw new Error('Color should be defined as hex string')
+  }
+
+  let hexCode = hex.slice().replace('#', '').split('')
+  if (hexCode.length < 3 || hexCode.length === 5 || hexCode.length > 8) {
+    throw new Error('Invalid hex color: ' + hex)
+  }
+
+  // Convert from short to long form (fff -> ffffff)
+  if (hexCode.length === 3 || hexCode.length === 4) {
+    hexCode = Array.prototype.concat.apply([], hexCode.map(function (c) {
+      return [c, c]
+    }))
+  }
+
+  // Add default alpha value
+  if (hexCode.length === 6) hexCode.push('F', 'F')
+
+  const hexValue = parseInt(hexCode.join(''), 16)
+
+  return {
+    r: (hexValue >> 24) & 255,
+    g: (hexValue >> 16) & 255,
+    b: (hexValue >> 8) & 255,
+    a: hexValue & 255,
+    hex: '#' + hexCode.slice(0, 6).join('')
+  }
+}
+
+exports.getOptions = function getOptions (options) {
+  if (!options) options = {}
+  if (!options.color) options.color = {}
+
+  const margin = typeof options.margin === 'undefined' ||
+    options.margin === null ||
+    options.margin < 0
+    ? 4
+    : options.margin
+
+  const width = options.width && options.width >= 21 ? options.width : undefined
+  const scale = options.scale || 4
+
+  return {
+    width: width,
+    scale: width ? 4 : scale,
+    margin: margin,
+    color: {
+      dark: hex2rgba(options.color.dark || '#000000ff'),
+      light: hex2rgba(options.color.light || '#ffffffff')
+    },
+    type: options.type,
+    rendererOpts: options.rendererOpts || {}
+  }
+}
+
+exports.getScale = function getScale (qrSize, opts) {
+  return opts.width && opts.width >= qrSize + opts.margin * 2
+    ? opts.width / (qrSize + opts.margin * 2)
+    : opts.scale
+}
+
+exports.getImageWidth = function getImageWidth (qrSize, opts) {
+  const scale = exports.getScale(qrSize, opts)
+  return Math.floor((qrSize + opts.margin * 2) * scale)
+}
+
+exports.qrToImageData = function qrToImageData (imgData, qr, opts) {
+  const size = qr.modules.size
+  const data = qr.modules.data
+  const scale = exports.getScale(size, opts)
+  const symbolSize = Math.floor((size + opts.margin * 2) * scale)
+  const scaledMargin = opts.margin * scale
+  const palette = [opts.color.light, opts.color.dark]
+
+  for (let i = 0; i < symbolSize; i++) {
+    for (let j = 0; j < symbolSize; j++) {
+      let posDst = (i * symbolSize + j) * 4
+      let pxColor = opts.color.light
+
+      if (i >= scaledMargin && j >= scaledMargin &&
+        i < symbolSize - scaledMargin && j < symbolSize - scaledMargin) {
+        const iSrc = Math.floor((i - scaledMargin) / scale)
+        const jSrc = Math.floor((j - scaledMargin) / scale)
+        pxColor = palette[data[iSrc * size + jSrc] ? 1 : 0]
+      }
+
+      imgData[posDst++] = pxColor.r
+      imgData[posDst++] = pxColor.g
+      imgData[posDst++] = pxColor.b
+      imgData[posDst] = pxColor.a
+    }
+  }
+}
+
+},{}]},{},[2])(2)
+});
+
+
+// ─── renderQR: wraps qrcode library → renders clean IMG ──
+function renderQR(text, container, px) {
+  container.innerHTML = '';
+  QRCode.toCanvas(document.createElement('canvas'), text, {
+    errorCorrectionLevel: 'M',
+    margin: 4,
+    width: px,
+    color: { dark: '#000000ff', light: '#ffffffff' }
+  }, function(err, canvas) {
+    if (err) { console.error('QR error:', err); container.textContent = 'QR Error: ' + err.message; return; }
+    // Ensure canvas width/height attributes match render size (no CSS scaling)
+    canvas.style.width = px + 'px';
+    canvas.style.height = px + 'px';
+    canvas.style.display = 'block';
+    canvas.style.imageRendering = 'pixelated';
+    canvas.style.borderRadius = '0';
+    canvas.style.border = 'none';
+    canvas.style.outline = 'none';
+    container.appendChild(canvas);
+  });
+}
+
+
+// ─── Reset ────────────────────────────────────────────────────
+function resetDemo() {
+  secret = null; totp = null;
+  if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+  document.getElementById('iEmail').value = 'admin@myapp.id';
+  document.getElementById('iPw').value = 'admin123';
+  document.getElementById('iPw').type = 'password';
+  document.getElementById('err1').classList.remove('show');
+  showStep(1);
+}
+
+// ─── Bootstrap ────────────────────────────────────────────────
+showStep(1);
+</script>
+</body>
+</html>
